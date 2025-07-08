@@ -5,12 +5,8 @@ use panic_halt as _; // panic handler
 
 use cortex_m;
 use cortex_m_rt::entry;
-use stm32f4xx_hal::{
-    pac,
-    prelude::*,
-    timer::Timer,
-};
-use rtt_target::{rtt_init_print, rprintln};
+use rtt_target::{rprintln, rtt_init_print};
+use stm32f4xx_hal::{pac, prelude::*, timer::Channel1, timer::Timer};
 
 #[entry]
 fn main() -> ! {
@@ -25,25 +21,28 @@ fn main() -> ! {
     // HAL structs
     let rcc = dp.RCC.constrain();
 
-    // Freeze the configuration of all the clocks in the system and use HSE (25 MHz) as the clock source
-    let clocks = rcc.cfgr.use_hse(25.MHz()).freeze();
+    let clocks = rcc.cfgr.sysclk(48.MHz()).freeze();
 
-    // Acquire the GPIO peripherals
-    let gpioa = dp.GPIOA.split();
-    let gpioc = dp.GPIOC.split();
-
-    // Configure PC13 as output for status LED
-    let mut led = gpioc.pc13.into_push_pull_output();
-
-    
-
-    // Configure PA8 as alternate function for TIM1_CH1
-
-
-    // Create a delay abstraction based on SysTick
     let mut delay = cp.SYST.delay(&clocks);
 
-    
+    let gpioc = dp.GPIOC.split();
+    let gpioa = dp.GPIOA.split();
+    let mut led = gpioc.pc13.into_push_pull_output();
+    let channels = Channel1::new(gpioa.pa8).with_complementary(gpioa.pa7);
+
+    let mut pwm = dp.TIM1.pwm_hz(channels, 70.kHz(), &clocks);
+
+    let mut max_duty: u16 = pwm.get_max_duty();
+
+    pwm.set_polarity(Channel::C1, Polarity::ActiveHigh);
+    pwm.set_complementary_polarity(Channel::C1, Polarity::ActiveHigh);
+
+    pwm.set_duty(Channel::C1, max_duty / 2);
+
+    pwm.set_dead_time(5);
+
+    pwm.enable(Channel::C1);
+    pwm.enable_complementary(Channel::C1);
 
     loop {
         // Status LED blink
@@ -52,7 +51,6 @@ fn main() -> ! {
         led.set_low();
         delay.delay_ms(50u32);
 
-        
         delay.delay_ms(100u32);
     }
 }

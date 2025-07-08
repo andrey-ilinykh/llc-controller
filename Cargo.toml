@@ -11,12 +11,11 @@ nb = "1.1"
 panic-halt = "1.0.0"
 
 # Optional RTT for debugging
-rtt-target = { version = "0.6.1"}
+rtt-target = { version = "0.6.1" }
 
 [dependencies.stm32f4xx-hal]
 version = "0.22.1"
-features = ["stm32f411"]
-
+features = ["stm32f411", "rt"]
 
 
 # this lets you use `cargo fix`!
