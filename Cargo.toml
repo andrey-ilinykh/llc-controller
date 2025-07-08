@@ -1,0 +1,32 @@
+[package]
+name = "llc-controller"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+embedded-hal = "1.0.0"
+nb = "1.1"
+panic-halt = "1.0.0"
+
+# Optional RTT for debugging
+rtt-target = { version = "0.6.1"}
+
+[dependencies.stm32f4xx-hal]
+version = "0.22.1"
+features = ["stm32f411"]
+
+
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "llc-controller"
+test = false
+bench = false
+
+[profile.release]
+# better optimizations
+codegen-units = 1
+debug = true
+lto = true
