@@ -24,7 +24,7 @@ fn main() -> ! {
     let rcc = dp.RCC.constrain();
     //let clocks = rcc.cfgr.sysclk(25.MHz()).freeze();
     let mut clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(48.MHz()).freeze();
-    let (mut pwm_mngr, (pwm_c1, ..)) = dp.TIM1.pwm_hz(20.kHz(), &mut clocks);
+    let (mut pwm_mngr, (pwm_c1, ..)) = dp.TIM1.pwm_hz(200.kHz(), &mut clocks);
 
     let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
 
@@ -35,7 +35,7 @@ fn main() -> ! {
 
     pwm_c1.set_duty(max_duty / 2);
 
-    pwm_mngr.set_dead_time(200);
+    pwm_mngr.set_dead_time(5);
 
     pwm_c1.enable();
     pwm_c1.enable_complementary();
