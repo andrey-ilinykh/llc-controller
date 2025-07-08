@@ -6,7 +6,9 @@ use panic_halt as _; // panic handler
 use cortex_m;
 use cortex_m_rt::entry;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::{pac, prelude::*, timer::Channel1, timer::Timer};
+use stm32f4xx_hal as hal;
+
+use hal::{pac, prelude::*, timer::Polarity};
 
 #[entry]
 fn main() -> ! {
@@ -17,32 +19,29 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cp = cortex_m::peripheral::Peripherals::take().unwrap();
 
-    // Take ownership over the raw flash and rcc devices and convert them into the corresponding
-    // HAL structs
-    let rcc = dp.RCC.constrain();
-
-    let clocks = rcc.cfgr.sysclk(48.MHz()).freeze();
-
-    let mut delay = cp.SYST.delay(&clocks);
-
-    let gpioc = dp.GPIOC.split();
     let gpioa = dp.GPIOA.split();
+    let gpioc = dp.GPIOC.split();
+    let rcc = dp.RCC.constrain();
+    //let clocks = rcc.cfgr.sysclk(25.MHz()).freeze();
+    let mut clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(48.MHz()).freeze();
+    let (mut pwm_mngr, (pwm_c1, ..)) = dp.TIM1.pwm_hz(20.kHz(), &mut clocks);
+
+    let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
+
+    let max_duty: u16 = pwm_c1.get_max_duty();
+
+    pwm_c1.set_polarity(Polarity::ActiveHigh);
+    pwm_c1.set_complementary_polarity(Polarity::ActiveHigh);
+
+    pwm_c1.set_duty(max_duty / 2);
+
+    pwm_mngr.set_dead_time(200);
+
+    pwm_c1.enable();
+    pwm_c1.enable_complementary();
+
     let mut led = gpioc.pc13.into_push_pull_output();
-    let channels = Channel1::new(gpioa.pa8).with_complementary(gpioa.pa7);
-
-    let mut pwm = dp.TIM1.pwm_hz(channels, 70.kHz(), &clocks);
-
-    let mut max_duty: u16 = pwm.get_max_duty();
-
-    pwm.set_polarity(Channel::C1, Polarity::ActiveHigh);
-    pwm.set_complementary_polarity(Channel::C1, Polarity::ActiveHigh);
-
-    pwm.set_duty(Channel::C1, max_duty / 2);
-
-    pwm.set_dead_time(5);
-
-    pwm.enable(Channel::C1);
-    pwm.enable_complementary(Channel::C1);
+    let mut delay = dp.TIM5.delay_us(&clocks);
 
     loop {
         // Status LED blink
