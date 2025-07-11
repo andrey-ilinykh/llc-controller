@@ -14,9 +14,9 @@ panic-halt = "1.0.0"
 rtt-target = { version = "0.6.1" }
 
 
-[dependencies.stm32f4xx-hal]
-version = "0.22.1"
-features = ["stm32f411"]
+[dependencies.stm32f1xx-hal]
+version = "0.10.0"
+features = ["stm32f103"]
 
 
 # this lets you use `cargo fix`!
