@@ -24,14 +24,21 @@ impl TIM1CCR1 {
 }
 unsafe impl hal::dma::traits::PeriAddress for TIM1CCR1 {
     fn address(&self) -> u32 {
-        TIM1::ptr() as u32 + 0x34 // CCR1 offset
+       // TIM1::ptr() as u32 + 0x34 // CCR1 offset
+       TIM1::ptr() as u32 + 0x20 // CCRE offset
     }
     type MemSize = u16; // Memory size is u16 for CCR1
 }
 
-unsafe impl DMASet<StreamX<DMA2, 5>, 5, MemoryToPeripheral> for TIM1CCR1 {}
+unsafe impl DMASet<StreamX<DMA2, 5>, 6, MemoryToPeripheral> for TIM1CCR1 {}
 
-static mut DUTY_PATTERN: [u16; 2] = [0, DUTY_MAX]; // off/on modulation
+static mut DUTY_PATTERN: [u16; 4] = [0, 0, 0, 64]; // off/on modulation
+static mut BURST_BUF: [u16; 2] = [
+    0b0000_0000_0000_0101, // Enable CH1 (CC1E) and CH1N (CC1NE)
+    0b0000_0000_0000_0000, // Disable both
+  //  0b0000_0000_0000_0101,
+];
+
 #[entry]
 fn main() -> ! {
     // Initialize RTT for printing debug messages
@@ -51,9 +58,9 @@ fn main() -> ! {
     let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
 
     let max_duty: u16 = pwm_c1.get_max_duty();
-    unsafe {
-        DUTY_PATTERN[1] = max_duty / 2; // off
-    }
+    // unsafe {
+    //     DUTY_PATTERN[1] = max_duty / 2; // off
+    // }
 
     pwm_c1.set_polarity(Polarity::ActiveHigh);
     pwm_c1.set_complementary_polarity(Polarity::ActiveHigh);
@@ -70,9 +77,33 @@ fn main() -> ! {
 
     // Enable DMA trigger on TIM1 update
     let tim1 = unsafe { &*pac::TIM1::ptr() };
-    tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
+    tim1.ccer().modify(|_, w| {
+    w.cc1p().clear_bit();   // CH1 polarity: 0 = active high
+    w.cc1np().clear_bit();  // CH1N polarity: 0 = active high
+    w
+});
 
+// Enable dead-time and off-state logic
+tim1.bdtr().modify(|_, w| unsafe {
+   w.dtg().bits(0x8)      // Dead-time: 0x40 ≈ ~1.5–2 µs at 84 MHz
+     .ossi().set_bit()      // Enable OSSI: force outputs LOW when disabled
+     .ossr().clear_bit()    // Optional: off-state in run mode = normal
+     .moe().set_bit()       // Main Output Enable
+});
+
+// Enable CH1 and CH1N
+tim1.ccer().modify(|_, w| {
+    w.cc1e().set_bit();     // Enable CH1 (main output)
+    w.cc1ne().set_bit();    // Enable CH1N (complementary)
+    w
+});
+    tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
+   // tim1.dier().modify(|_, w| w.uie().set_bit()); // Enable update interrupt
     //tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
+    //tim1.bdtr().modify(|_, w| w.ossi().set_bit());
+    //tim1.ccer().modify(|_, w| w.cc1np().clear_bit()); // active high
+
+
 
     // Set up DMA to write to CCR1
     let streams = StreamsTuple::new(dp.DMA2);
@@ -89,7 +120,7 @@ fn main() -> ! {
     let mut transfer = Transfer::init_memory_to_peripheral(
         dma_stream,
         peripheral,
-        unsafe { &mut DUTY_PATTERN }, // source must be &'static mut [u16]
+        unsafe { &mut BURST_BUF }, // source must be &'static mut [u16]
         // destination: HAL abstraction for CCR1
         None, // no double buffer
         dma_cfg,
