@@ -3,7 +3,6 @@
 
 use panic_halt as _; // panic handler
 
-use cortex_m;
 use cortex_m_rt::entry;
 use rtt_target::{rprintln, rtt_init_print};
 use stm32f4xx_hal::{
@@ -22,19 +21,18 @@ impl TIM1CCER {
 }
 unsafe impl hal::dma::traits::PeriAddress for TIM1CCER {
     fn address(&self) -> u32 {
-       // TIM1::ptr() as u32 + 0x34 // CCR1 offset
-       TIM1::ptr() as u32 + 0x20 // CCRE offset
+        // TIM1::ptr() as u32 + 0x34 // CCR1 offset
+        TIM1::ptr() as u32 + 0x20 // CCRE offset
     }
     type MemSize = u16; // Memory size is u16 for CCR1
 }
 
 unsafe impl DMASet<StreamX<DMA2, 5>, 6, MemoryToPeripheral> for TIM1CCER {}
 
-
 static BURST_BUF: [u16; 2] = [
     0b0000_0000_0000_0101, // Enable CH1 (CC1E) and CH1N (CC1NE)
     0b0000_0000_0000_0000, // Disable both
-  //  0b0000_0000_0000_0101,
+                           //  0b0000_0000_0000_0101,
 ];
 
 #[entry]
@@ -55,7 +53,6 @@ fn main() -> ! {
     let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
 
     let max_duty: u16 = pwm_c1.get_max_duty();
- 
 
     pwm_c1.set_polarity(Polarity::ActiveHigh);
     pwm_c1.set_complementary_polarity(Polarity::ActiveHigh);
@@ -73,27 +70,30 @@ fn main() -> ! {
     // Enable DMA trigger on TIM1 update
     let tim1 = unsafe { &*pac::TIM1::ptr() };
     tim1.ccer().modify(|_, w| {
-    w.cc1p().clear_bit();   // CH1 polarity: 0 = active high
-    w.cc1np().clear_bit();  // CH1N polarity: 0 = active high
-    w
-});
+        w.cc1p().clear_bit(); // CH1 polarity: 0 = active high
+        w.cc1np().clear_bit(); // CH1N polarity: 0 = active high
+        w
+    });
 
-// Enable dead-time and off-state logic
-tim1.bdtr().modify(|_, w| unsafe {
-   w.dtg().bits(0x8)      // Dead-time: 0x40 ≈ ~1.5–2 µs at 84 MHz
-     .ossi().set_bit()      // Enable OSSI: force outputs LOW when disabled
-     .ossr().clear_bit()    // Optional: off-state in run mode = normal
-     .moe().set_bit()       // Main Output Enable
-});
+    // Enable dead-time and off-state logic
+    tim1.bdtr().modify(|_, w| unsafe {
+        w.dtg()
+            .bits(0x8) // Dead-time: 0x40 ≈ ~1.5–2 µs at 84 MHz
+            .ossi()
+            .set_bit() // Enable OSSI: force outputs LOW when disabled
+            .ossr()
+            .clear_bit() // Optional: off-state in run mode = normal
+            .moe()
+            .set_bit() // Main Output Enable
+    });
 
-// Enable CH1 and CH1N
-tim1.ccer().modify(|_, w| {
-    w.cc1e().set_bit();     // Enable CH1 (main output)
-    w.cc1ne().set_bit();    // Enable CH1N (complementary)
-    w
-});
+    // Enable CH1 and CH1N
+    tim1.ccer().modify(|_, w| {
+        w.cc1e().set_bit(); // Enable CH1 (main output)
+        w.cc1ne().set_bit(); // Enable CH1N (complementary)
+        w
+    });
     tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
-   
 
     // Set up DMA to write to CCER
     let streams = StreamsTuple::new(dp.DMA2);
@@ -108,15 +108,14 @@ tim1.ccer().modify(|_, w| {
 
     // SAFETY: DUTY_PATTERN is only used here and not aliased elsewhere
     let mut transfer = Transfer::init_memory_to_peripheral(
-        dma_stream,
-        peripheral,
-        &BURST_BUF,
+        dma_stream, peripheral, &BURST_BUF,
         // destination: HAL abstraction for CCR1
         None, // no double buffer
         dma_cfg,
     );
-    let  _ = transfer.start(|_s| {});
+    let _ = transfer.start(|_s| {});
 
+    rprintln!("DMA transfer started");
     loop {
         // Status LED blink
         led.set_high();
