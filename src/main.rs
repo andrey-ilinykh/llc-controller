@@ -9,20 +9,18 @@ use rtt_target::{rprintln, rtt_init_print};
 use stm32f4xx_hal::{
     self as hal,
     dma::{config::DmaConfig, traits::DMASet, MemoryToPeripheral, StreamX, StreamsTuple, Transfer},
-    pac::{DMA2, SPI2, TIM1},
-    spi::Spi,
+    pac::{DMA2, TIM1},
 };
 
 use hal::{pac, prelude::*, timer::Polarity};
-const DUTY_MAX: u16 = 2400;
-struct TIM1CCR1 {}
+struct TIM1CCER {}
 
-impl TIM1CCR1 {
+impl TIM1CCER {
     pub fn new() -> Self {
-        TIM1CCR1 {}
+        TIM1CCER {}
     }
 }
-unsafe impl hal::dma::traits::PeriAddress for TIM1CCR1 {
+unsafe impl hal::dma::traits::PeriAddress for TIM1CCER {
     fn address(&self) -> u32 {
        // TIM1::ptr() as u32 + 0x34 // CCR1 offset
        TIM1::ptr() as u32 + 0x20 // CCRE offset
@@ -30,10 +28,10 @@ unsafe impl hal::dma::traits::PeriAddress for TIM1CCR1 {
     type MemSize = u16; // Memory size is u16 for CCR1
 }
 
-unsafe impl DMASet<StreamX<DMA2, 5>, 6, MemoryToPeripheral> for TIM1CCR1 {}
+unsafe impl DMASet<StreamX<DMA2, 5>, 6, MemoryToPeripheral> for TIM1CCER {}
 
-static mut DUTY_PATTERN: [u16; 4] = [0, 0, 0, 64]; // off/on modulation
-static mut BURST_BUF: [u16; 2] = [
+
+static BURST_BUF: [u16; 2] = [
     0b0000_0000_0000_0101, // Enable CH1 (CC1E) and CH1N (CC1NE)
     0b0000_0000_0000_0000, // Disable both
   //  0b0000_0000_0000_0101,
@@ -46,7 +44,6 @@ fn main() -> ! {
 
     // Get access to the device specific peripherals from the peripheral access crate
     let dp = pac::Peripherals::take().unwrap();
-    let cp = cortex_m::peripheral::Peripherals::take().unwrap();
 
     let gpioa = dp.GPIOA.split();
     let gpioc = dp.GPIOC.split();
@@ -58,9 +55,7 @@ fn main() -> ! {
     let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
 
     let max_duty: u16 = pwm_c1.get_max_duty();
-    // unsafe {
-    //     DUTY_PATTERN[1] = max_duty / 2; // off
-    // }
+ 
 
     pwm_c1.set_polarity(Polarity::ActiveHigh);
     pwm_c1.set_complementary_polarity(Polarity::ActiveHigh);
@@ -98,14 +93,9 @@ tim1.ccer().modify(|_, w| {
     w
 });
     tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
-   // tim1.dier().modify(|_, w| w.uie().set_bit()); // Enable update interrupt
-    //tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
-    //tim1.bdtr().modify(|_, w| w.ossi().set_bit());
-    //tim1.ccer().modify(|_, w| w.cc1np().clear_bit()); // active high
+   
 
-
-
-    // Set up DMA to write to CCR1
+    // Set up DMA to write to CCER
     let streams = StreamsTuple::new(dp.DMA2);
     let mut dma_stream = streams.5; // Stream5 for TIM1_UP (ch6)
     dma_stream.set_circular_mode(true);
@@ -114,18 +104,18 @@ tim1.ccer().modify(|_, w| {
         .memory_increment(true)
         .peripheral_increment(false);
 
-    let peripheral = TIM1CCR1::new();
+    let peripheral = TIM1CCER::new();
 
     // SAFETY: DUTY_PATTERN is only used here and not aliased elsewhere
     let mut transfer = Transfer::init_memory_to_peripheral(
         dma_stream,
         peripheral,
-        unsafe { &mut BURST_BUF }, // source must be &'static mut [u16]
+        &BURST_BUF,
         // destination: HAL abstraction for CCR1
         None, // no double buffer
         dma_cfg,
     );
-    let mut transfer = transfer.start(|_s| {});
+    let  _ = transfer.start(|_s| {});
 
     loop {
         // Status LED blink
