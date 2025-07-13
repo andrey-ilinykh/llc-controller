@@ -1,139 +1,150 @@
 #![no_std]
 #![no_main]
 
+use nb::block;
 use panic_halt as _; // panic handler
 
-use cortex_m;
+use cortex_m::{self};
 use cortex_m_rt::entry;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::{
+use stm32f1xx_hal::{
     self as hal,
-    dma::{config::DmaConfig, traits::DMASet, MemoryToPeripheral, StreamX, StreamsTuple, Transfer},
-    pac::{DMA2, SPI2, TIM1},
-    spi::Spi,
+     timer::{Tim1NoRemap, Timer},
 };
 
-use hal::{pac, prelude::*, timer::Polarity};
-const DUTY_MAX: u16 = 2400;
-struct TIM1CCR1 {}
+use hal::{pac, prelude::*};
 
-impl TIM1CCR1 {
-    pub fn new() -> Self {
-        TIM1CCR1 {}
-    }
-}
-unsafe impl hal::dma::traits::PeriAddress for TIM1CCR1 {
-    fn address(&self) -> u32 {
-       // TIM1::ptr() as u32 + 0x34 // CCR1 offset
-       TIM1::ptr() as u32 + 0x20 // CCRE offset
-    }
-    type MemSize = u16; // Memory size is u16 for CCR1
-}
-
-unsafe impl DMASet<StreamX<DMA2, 5>, 6, MemoryToPeripheral> for TIM1CCR1 {}
-
-static mut DUTY_PATTERN: [u16; 4] = [0, 0, 0, 64]; // off/on modulation
-static mut BURST_BUF: [u16; 2] = [
-    0b0000_0000_0000_0101, // Enable CH1 (CC1E) and CH1N (CC1NE)
-    0b0000_0000_0000_0000, // Disable both
-  //  0b0000_0000_0000_0101,
-];
 
 #[entry]
 fn main() -> ! {
-    // Initialize RTT for printing debug messages
-    rtt_init_print!();
-
-    // Get access to the device specific peripherals from the peripheral access crate
+    rtt_init_print!(); // Initialize RTT for printing
+    let cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
-    let cp = cortex_m::peripheral::Peripherals::take().unwrap();
 
-    let gpioa = dp.GPIOA.split();
-    let gpioc = dp.GPIOC.split();
+    // Set up clocks
+    let mut flash = dp.FLASH.constrain();
     let rcc = dp.RCC.constrain();
-    //let clocks = rcc.cfgr.sysclk(25.MHz()).freeze();
-    let mut clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(48.MHz()).freeze();
-    let (mut pwm_mngr, (pwm_c1, ..)) = dp.TIM1.pwm_hz(200.kHz(), &mut clocks);
+    let clocks = rcc.cfgr.sysclk(72.MHz()).freeze(&mut flash.acr);
 
-    let mut pwm_c1 = pwm_c1.with(gpioa.pa8).with_complementary(gpioa.pa7);
-
-    let max_duty: u16 = pwm_c1.get_max_duty();
-    // unsafe {
-    //     DUTY_PATTERN[1] = max_duty / 2; // off
-    // }
-
-    pwm_c1.set_polarity(Polarity::ActiveHigh);
-    pwm_c1.set_complementary_polarity(Polarity::ActiveHigh);
-
-    pwm_c1.set_duty(max_duty / 2);
-
-    pwm_mngr.set_dead_time(5);
-
-    pwm_c1.enable();
-    pwm_c1.enable_complementary();
-
-    let mut led = gpioc.pc13.into_push_pull_output();
-    let mut delay = dp.TIM5.delay_us(&clocks);
-
-    // Enable DMA trigger on TIM1 update
-    let tim1 = unsafe { &*pac::TIM1::ptr() };
-    tim1.ccer().modify(|_, w| {
-    w.cc1p().clear_bit();   // CH1 polarity: 0 = active high
-    w.cc1np().clear_bit();  // CH1N polarity: 0 = active high
-    w
-});
-
-// Enable dead-time and off-state logic
-tim1.bdtr().modify(|_, w| unsafe {
-   w.dtg().bits(0x8)      // Dead-time: 0x40 ≈ ~1.5–2 µs at 84 MHz
-     .ossi().set_bit()      // Enable OSSI: force outputs LOW when disabled
-     .ossr().clear_bit()    // Optional: off-state in run mode = normal
-     .moe().set_bit()       // Main Output Enable
-});
-
-// Enable CH1 and CH1N
-tim1.ccer().modify(|_, w| {
-    w.cc1e().set_bit();     // Enable CH1 (main output)
-    w.cc1ne().set_bit();    // Enable CH1N (complementary)
-    w
-});
-    tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
-   // tim1.dier().modify(|_, w| w.uie().set_bit()); // Enable update interrupt
-    //tim1.dier().modify(|_, w| w.ude().set_bit()); // Update DMA request
-    //tim1.bdtr().modify(|_, w| w.ossi().set_bit());
-    //tim1.ccer().modify(|_, w| w.cc1np().clear_bit()); // active high
+    // Set up GPIO
+    let mut afio = dp.AFIO.constrain();
+    let mut gpioa = dp.GPIOA.split();
+    let mut gpiob = dp.GPIOB.split();
+    let mut gpioc = dp.GPIOC.split();
 
 
+    let pa8 = gpioa.pa8.into_alternate_push_pull(&mut gpioa.crh); // TIM1_CH1
+    let _pb13 = gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh); // TIM1_CH1N
 
-    // Set up DMA to write to CCR1
-    let streams = StreamsTuple::new(dp.DMA2);
-    let mut dma_stream = streams.5; // Stream5 for TIM1_UP (ch6)
-    dma_stream.set_circular_mode(true);
-
-    let dma_cfg = DmaConfig::default()
-        .memory_increment(true)
-        .peripheral_increment(false);
-
-    let peripheral = TIM1CCR1::new();
-
-    // SAFETY: DUTY_PATTERN is only used here and not aliased elsewhere
-    let mut transfer = Transfer::init_memory_to_peripheral(
-        dma_stream,
-        peripheral,
-        unsafe { &mut BURST_BUF }, // source must be &'static mut [u16]
-        // destination: HAL abstraction for CCR1
-        None, // no double buffer
-        dma_cfg,
+    // Set up TIM1 PWM
+    let pwm = dp.TIM1.pwm_hz::<Tim1NoRemap, _, _>(
+        pa8,
+        &mut afio.mapr,
+        200.kHz(),
+        &clocks,
+       
     );
-    let mut transfer = transfer.start(|_s| {});
 
+    let mut pwm_ch1 = pwm.split();
+    
+    let max = pwm_ch1.get_max_duty();
+    pwm_ch1.set_duty(max / 2); // 50% duty
+    pwm_ch1.enable();
+
+    // PAC access to TIM1
+    let tim1 = unsafe { &*pac::TIM1::ptr() };
+
+    // 1. Enable CH1N (complementary)
+    tim1.ccer.modify(|_, w| {
+        w.cc1e().set_bit();   // Enable CH1
+        w.cc1ne().set_bit();  // Enable CH1N
+        w.cc1p().clear_bit();  // CH1 active high
+        w.cc1np().clear_bit(); // CH1N active high
+        w
+    });
+
+    // 2. Set dead time and enable main output
+    tim1.bdtr.modify(|_, w| unsafe {
+        w.dtg().bits(8)        // ~100 ns at 72 MHz → 10 × 13.8 ns = ~138 ns
+         .ossi().set_bit()      // Off-state output enabled
+         .moe().set_bit()       // Main Output Enable
+    });
+
+    let mut dma = dp.DMA1.split();
+    static mut BURST_BUF: [u16; 4] = [0b0101, 0b0, 0b0, 0b0]; // CH1+CH1N on, then off
+    
+    
+
+    unsafe {
+        dma.3.ch().cr.modify(|_, w| {
+            w.en().clear_bit() // Disable channel
+          
+        });
+       
+       dma.3.ch().par.write(|w| w.bits(&tim1.ccer as *const _ as u32));
+       dma.3.ch().mar
+        .write(|w| w.bits(BURST_BUF.as_ptr() as u32));
+
+    
+
+    
+
+
+       dma.3.ch().ndtr
+        .write(|w| w.ndt().bits(4));
+
+        dma.3.ch().cr.modify(|_, w| {
+            w.mem2mem().clear_bit() // Memory to peripheral
+             .pl().very_high()              // Medium priority
+             .msize().bits16()           // Memory: 16-bit
+             .psize().bits16()  
+             .minc().set_bit() // Memory increment mode
+             .pinc().clear_bit() // Peripheral not incremented
+             .circ().set_bit() // Circular mode
+             .dir().set_bit() // Memory to peripheral direction
+             
+        });
+        
+    }
+
+    dma.3.ch().cr.modify(|_, w| {
+            w.en().set_bit() // EnableDisable channel
+          //   .tcie().set_bit() // Transfer complete interrupt enabled
+        });
+    
+    
+    let arr = tim1.arr.read().bits();
+    tim1.ccr2().write(|w| unsafe { w.bits(arr -5) }); // 5 ticks before overflow
+    tim1.ccmr1_output().modify(|_, w| w.oc2pe().clear_bit()); // no preload
+
+
+    
+
+    tim1.ccer.modify(|_, w| w.cc2e().clear_bit()); // No output
+    tim1.dier.modify(|_, w| w.cc2de().set_bit()); // Enable DMA on CCR2
+   
+
+
+    // Enable counter
+    tim1.cr1.modify(|_, w| w.cen().set_bit());
+   
+
+    let mut timer = Timer::syst(cp.SYST, &clocks).counter_hz();
+    timer.start(10.Hz()).unwrap();
+    let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
     loop {
-        // Status LED blink
-        led.set_high();
-        delay.delay_ms(50u32);
-        led.set_low();
-        delay.delay_ms(50u32);
+      for _ in 0..10 {
+        block!(timer.wait()).unwrap();
+        }
+ //     tim1.ccer.modify(|_, w| w.cc1e().set_bit()); // Enable CH1
+        let ccr1 = tim1.ccr1().read().bits();
+        
 
-        delay.delay_ms(100u32);
+        rprintln!("ccr1: {:#06X}, arr: {:#06X}", max, arr);
+       // rprintln!("LED ON");
+        led.set_high();
+        block!(timer.wait()).unwrap();
+  //      tim1.ccer.modify(|_, w| w.cc1e().clear_bit()); // Disable CH1
+        led.set_low();
     }
 }

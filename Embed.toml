@@ -11,7 +11,7 @@ enabled = true
 #halt_afterwards = false
 
 [default.general]
-chip = "STM32F411CEUx"
+chip = "STM32F103C8"
 # Use this if you have a different STM32F411 variant:
 # chip = "STM32F411RETx"  # for 512KB Flash variant
 # chip = "STM32F411VETx"  # for 512KB Flash, 100-pin variant
