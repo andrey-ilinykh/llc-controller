@@ -18,6 +18,7 @@ use stm32f1xx_hal::{
     timer::{CPin, Ch, PwmChannel, PwmHz, Tim1NoRemap, Timer},
 };
 static mut BURST_BUF: [u16; 4] = [0b0101, 0b0, 0b0, 0b0]; // CH1+CH1N on, then off
+//static mut BURST_BUF: [u16; 4] = [0b0101, 0b0101, 0b0101, 0b0101]; // CH1+CH1N on, then off
 struct PwmController<'a, const C: u8> {
     tim1: &'a pac::tim1::RegisterBlock,
     dma: Channels,
@@ -70,72 +71,73 @@ impl<'a, const C: u8> PwmController<'a, C> {
     fn init(&mut self) {
         self.pwm_ch1.set_duty(self.pwm_ch1.get_max_duty() / 2); // 50% duty
 
-        self.tim1.bdtr.modify(|_, w| unsafe {
-            w.dtg()
-                .bits(8) // ~100 ns at 72 MHz → 10 × 13.8 ns = ~138 ns
-                .ossi()
-                .set_bit() // Off-state output enabled
-                .moe()
-                .set_bit() // Main Output Enable
-        });
+         // 1. Enable CH1N (complementary)
+    self.tim1.ccer.modify(|_, w| {
+       // w.cc1e().set_bit();   // Enable CH1
+       // w.cc1ne().set_bit();  // Enable CH1N
+        w.cc1p().clear_bit();  // CH1 active high
+        w.cc1np().clear_bit(); // CH1N active high
+        w
+    });
 
-        self.tim1.ccer.modify(|_, w| {
-            //  w.cc1e().set_bit(); // Enable CH1
-            //  w.cc1ne().set_bit(); // Enable CH1N
-            w.cc1p().clear_bit(); // CH1 active high
-            w.cc1np().clear_bit(); // CH1N active high
-            w
-        });
+    // 2. Set dead time and enable main output
+    self.tim1.bdtr.modify(|_, w| unsafe {
+        w.dtg().bits(10)        // ~100 ns at 72 MHz → 10 × 13.8 ns = ~138 ns
+         .ossi().set_bit()      // Off-state output enabled
+         .moe().set_bit()       // Main Output Enable
+    });
 
-        self.dma.3.ch().cr.modify(|_, w| {
-            w.en().clear_bit() // Disable channel
-        });
 
         unsafe {
-            self.dma
-                .3
-                .ch()
-                .par
-                .write(|w| w.bits(&self.tim1.ccer as *const _ as u32));
+        self.dma.3.ch().cr.modify(|_, w| {
+            w.en().clear_bit() // Disable channel
+          
+        });
+       
+       self.dma.3.ch().par.write(|w| w.bits(&self.tim1.ccer as *const _ as u32));
+       self.dma.3.ch().mar
+        .write(|w| w.bits(BURST_BUF.as_ptr() as u32));
 
-            self.dma
-                .3
-                .ch()
-                .mar
-                .write(|w| w.bits(BURST_BUF.as_ptr() as u32));
-        }
-        self.dma.3.ch().ndtr.write(|w| w.ndt().bits(4));
+
+       self.dma.3.ch().ndtr
+        .write(|w| w.ndt().bits(4));
 
         self.dma.3.ch().cr.modify(|_, w| {
-            w.mem2mem()
-                .clear_bit() // Memory to peripheral
-                .pl()
-                .very_high() // Medium priority
-                .msize()
-                .bits16() // Memory: 16-bit
-                .psize()
-                .bits16()
-                .minc()
-                .set_bit() // Memory increment mode
-                .pinc()
-                .clear_bit() // Peripheral not incremented
-                .circ()
-                .set_bit() // Circular mode
-                .dir()
-                .set_bit() // Memory to peripheral direction
+            w.mem2mem().clear_bit() // Memory to peripheral
+             .pl().very_high()              // Medium priority
+             .msize().bits16()           // Memory: 16-bit
+             .psize().bits16()  
+             .minc().set_bit() // Memory increment mode
+             .pinc().clear_bit() // Peripheral not incremented
+             .circ().set_bit() // Circular mode
+             .dir().set_bit() // Memory to peripheral direction
+             
         });
+        
+    }
 
-        let arr = self.tim1.arr.read().bits();
-        self.tim1.ccr2().write(|w| unsafe { w.bits(arr - 5) }); // 5 ticks before overflow
-        self.tim1
-            .ccmr1_output()
-            .modify(|_, w| w.oc2pe().clear_bit()); // no preload
+    self.dma.3.ch().cr.modify(|_, w| {
+            w.en().set_bit() // EnableDisable channel
+          //   .tcie().set_bit() // Transfer complete interrupt enabled
+        });
+    
+    
+    let arr = self.tim1.arr.read().bits();
+    self.tim1.ccr2().write(|w| unsafe { w.bits(arr -5) }); // 5 ticks before overflow
+    self.tim1.ccmr1_output().modify(|_, w| w.oc2pe().clear_bit()); // no preload
 
-        self.tim1.ccer.modify(|_, w| w.cc2e().clear_bit()); // No output
-        self.tim1.dier.modify(|_, w| w.cc2de().set_bit()); // Enable DMA on CCR2
 
-        // Enable counter
-        self.tim1.cr1.modify(|_, w| w.cen().set_bit());
+    
+
+    self.tim1.ccer.modify(|_, w| w.cc2e().clear_bit()); // No output
+    self.tim1.dier.modify(|_, w| w.cc2de().set_bit()); // Enable DMA on CCR2
+   
+
+ 
+    // Enable counter
+    self.tim1.cr1.modify(|_, w| w.cen().set_bit());
+   
+
     }
 }
 
@@ -150,7 +152,7 @@ fn main() -> ! {
     // Set up clocks
     let mut flash = dp.FLASH.constrain();
     let rcc = dp.RCC.constrain();
-    let clocks = rcc.cfgr.sysclk(72.MHz()).freeze(&mut flash.acr);
+    let clocks = rcc.cfgr.use_hse(8.MHz()).sysclk(72.MHz()).freeze(&mut flash.acr);
 
     // Set up GPIO
     let mut afio = dp.AFIO.constrain();
@@ -172,19 +174,19 @@ fn main() -> ! {
                                                                      // let foo = Foo1::new(dp.TIM1, pa8, &mut afio.mapr, 200.kHz(), &clocks);
 
     let dma: stm32f1xx_hal::dma::dma1::Channels = dp.DMA1.split();
-    let mut pwc = PwmController::new(dp.TIM1, pa8, &mut afio.mapr, 200.kHz(), &clocks, dma);
-
+    let mut pwc = PwmController::new(dp.TIM1, pa8, &mut afio.mapr, 250.kHz(), &clocks, dma);
+    pwc.init();
     let mut timer = Timer::syst(cp.SYST, &clocks).counter_hz();
     timer.start(10.Hz()).unwrap();
     let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
-    pwc.enable();
+    //pwc.enable();
     loop {
         for _ in 0..10 {
             block!(timer.wait()).unwrap();
         }
         //     tim1.ccer.modify(|_, w| w.cc1e().set_bit()); // Enable CH1
-
-        // rprintln!("LED ON");
+        let f = clocks.sysclk(); // 72 MHz / 1000 = 72000
+        rprintln!("LED ON {}", f);
         led.set_high();
         block!(timer.wait()).unwrap();
         //      tim1.ccer.modify(|_, w| w.cc1e().clear_bit()); // Disable CH1
