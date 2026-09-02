@@ -17,8 +17,8 @@ use stm32f1xx_hal::{
     time::Hertz,
     timer::{CPin, Ch, PwmChannel, PwmHz, Tim1NoRemap, Timer},
 };
-static mut BURST_BUF: [u16; 4] = [0b0101, 0b0, 0b0, 0b0]; // CH1+CH1N on, then off
-//static mut BURST_BUF: [u16; 4] = [0b0101, 0b0101, 0b0101, 0b0101]; // CH1+CH1N on, then off
+//static mut BURST_BUF: [u16; 8] = [0b0101, 0b0, 0b0, 0b0, 0b0, 0b0, 0b0, 0b0 ]; // CH1+CH1N on, then off
+static mut BURST_BUF: [u16; 8] = [0b0101, 0b0101, 0b0101, 0b0101, 0b0101, 0b0101, 0b0101, 0b0101 ]; // CH1+CH1N on, then off
 struct PwmController<'a, const C: u8> {
     tim1: &'a pac::tim1::RegisterBlock,
     dma: Channels,
@@ -82,7 +82,7 @@ impl<'a, const C: u8> PwmController<'a, C> {
 
     // 2. Set dead time and enable main output
     self.tim1.bdtr.modify(|_, w| unsafe {
-        w.dtg().bits(10)        // ~100 ns at 72 MHz → 10 × 13.8 ns = ~138 ns
+        w.dtg().bits(5)        // ~100 ns at 72 MHz → 10 × 13.8 ns = ~138 ns
          .ossi().set_bit()      // Off-state output enabled
          .moe().set_bit()       // Main Output Enable
     });
@@ -100,7 +100,7 @@ impl<'a, const C: u8> PwmController<'a, C> {
 
 
        self.dma.3.ch().ndtr
-        .write(|w| w.ndt().bits(4));
+        .write(|w| w.ndt().bits(BURST_BUF.len() as u16));
 
         self.dma.3.ch().cr.modify(|_, w| {
             w.mem2mem().clear_bit() // Memory to peripheral
@@ -174,7 +174,7 @@ fn main() -> ! {
                                                                      // let foo = Foo1::new(dp.TIM1, pa8, &mut afio.mapr, 200.kHz(), &clocks);
 
     let dma: stm32f1xx_hal::dma::dma1::Channels = dp.DMA1.split();
-    let mut pwc = PwmController::new(dp.TIM1, pa8, &mut afio.mapr, 250.kHz(), &clocks, dma);
+    let mut pwc = PwmController::new(dp.TIM1, pa8, &mut afio.mapr, 110.kHz(), &clocks, dma);
     pwc.init();
     let mut timer = Timer::syst(cp.SYST, &clocks).counter_hz();
     timer.start(10.Hz()).unwrap();
